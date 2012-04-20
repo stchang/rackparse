@@ -1,6 +1,7 @@
 #lang racket
 
-;; Implementation of Parsec (see Leijen and Meijer 2001)
+;; Implementation of Monadic Parser Combinators
+;; based on Hutton and Meijer's 1996 paper
 
 
 ;; ----------------------------------------------------------------------------
