@@ -27,7 +27,7 @@
 ;; Helper fns
 
 ;; str-cons :: Char [ListOf Char] -> String
-(define (str-cons c cs) (apply string (cons c cs)))
+(define (str-cons c cs) (string-append (string c) cs))
 
 (define (empty-string? s) (string=? "" s))
 
@@ -53,7 +53,7 @@
 
 
 ;; ----------------------------------------------------------------------------
-;; basic xparser combinators
+;; basic parser combinators
 
 ;; mk$nop :: a -> Parser a
 ;; makes a Parser that consumes no input and returns v (ie, a no-op)
@@ -65,14 +65,56 @@
 ;;   else fail
 (define (sat p?)
   (λ (inp)
-    (cond ([(empty-string? inp) (ParseResult #f 'Error inp)]
-           [else
+    (cond [(empty-string? inp) (ParseResult #f 'Error inp)]
+          [else (let ([c (string-ref inp 0)]
+                      [cs (substring inp 1)])
+                  (if (p? c) 
+                      (ParseResult #t c cs)
+                      (ParseResult #f 'Error cs)))]))
   #;(>>= $char 
        (λ (x) (if (p? x) (mk$nop x) $fail))))
 
+;; >>= :: Parser a -> (a -> Parser b) -> Parser b
+;; bind operator
+(define (>>= p f) 
+  (λ (inp) 
+    (match (p inp)
+      [(ParseResult #f x _) ((f x) inp)] ; inp-rest == inp
+      [(ParseResult #f 'Error _) (ParseResult #f 'Error inp)]
+      [(ParseResult #t x inp-rest)
+       (match ((f x) inp-rest)
+         [(ParseResult _ y inp-rest2)
+          (ParseResult #t y inp-rest2)])]
+      [res ; (ParseResult #t 'Error inp-rest)
+       res])
+    #;(apply append (map 
+                   (match-lambda [(ParseResult res next) ((f res) next)])
+                   (p inp)))))
 
+  
+;; <or> :: Parser a -> Parser a -> Parser a
+;; choice combinator (ie "plus" or <|> or ++)
+(define (<or> p q) 
+  (λ (inp) 
+    (match (p inp)
+      [(ParseResult #f 'Error _) (q inp)]
+      [(ParseResult #f x _)
+       (match (q inp)
+         [(ParseResult #f _ _) (ParseResult #f x inp)]
+         [consumed consumed])]
+      [consumed consumed])
+    #;(append (p inp) (q inp))))
+
+;; try :: Parser a -> Parser a
+(define (try $p)
+  (λ (inp)
+    (match ($p inp)
+      [(ParseResult #t 'Error _) (ParseResult #f 'Error inp)]
+      [other other])))
+  
+  
 ;; ----------------------------------------------------------------------------
-;; parser combinators
+;; derived parser combinators
 
 
 ;; $fail :: Parser a
@@ -87,15 +129,9 @@
       null
       (list (ParseResult (string-ref inp 0) (substring inp 1)))))
 
-;; >>= :: Parser a -> (a -> Parser b) -> Parser b
-;; bind operator
-(define (>>= p f) 
-  (λ (inp) 
-    (apply append (map 
-                   (match-lambda [(ParseResult res next) ((f res) next)])
-                   (p inp)))))
-
-
+;; ----------------------------
+;; combinators derived from sat
+  
 ;; mk$char :: Char -> Parser Char
 (define (mk$char c1) (sat (λ (c2) (eq? c1 c2))))
 
@@ -105,9 +141,9 @@
 (define $lower (sat (λ (x) (and (char<=? #\a x) (char<=? x #\z)))))
 (define $upper (sat (λ (x) (and (char<=? #\A x) (char<=? x #\Z)))))
 
-;; <or> :: Parser a -> Parser a -> Parser a
-;; choice combinator (ie "plus" or <|> or ++)
-(define (<or> p q) (λ (inp) (append (p inp) (q inp))))
+ 
+;; ------------------------------
+;; combinators derived from <or>
 
 ;; $letter,$alphanum :: Parser Char
 ;; parses any one letter or alphanumeric char
@@ -153,20 +189,23 @@
    . <or> .
    (mk$nop null)))
 
-;; $ident :: Parser String
-;; parses a Haskell identifier (begins with lowercase)
-(define $ident
-  (~ c  <- $lower
-     cs <- (<*> $alphanum)
-     (str-cons c cs)))
    
 ;; Parser Char -> Parser String
 ;; (equiv to many1 in paper)
 ;; at least one, then kleene star
 (define (<+> p)
   (~ c  <- p
-     cs <- (<*> p)
+;     cs <- (<*> p)
+     cs <- ((<+> p) . <or> . (mk$nop null))
      (cons c cs)))
+
+;; $ident :: Parser String
+;; parses a Haskell identifier (begins with lowercase)
+(define $ident
+  (<+> (($letter . <or> . $digit) . <or> . (mk$char #\_)))
+  #;(~ c  <- $lower
+     cs <- (<*> $alphanum)
+     (str-cons c cs)))
 
 ;; $nat :: Parser Int
 #;(define $nat

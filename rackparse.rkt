@@ -23,7 +23,7 @@
 ;; Helper fns
 
 ;; str-cons :: Char [ListOf Char] -> String
-(define (str-cons c cs) (apply string (cons c cs)))
+(define (str-cons c cs) (string-append (string c) cs))
 
 ;; ----------------------------------------------------------------------------
 ;; monadic syntax for combining parsers
