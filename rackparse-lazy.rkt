@@ -10,18 +10,32 @@
 
 ;; An Input is a String
 
-;; A [ParseResult X] is a 
-;;   (ParseResult consumed?:Bool (res:X or 'Error) next:Input)
-;;    where consumed? indicates whether any input was consumed
-;;          res is the result, with type X; or the 'Error literal
-;;     and next is the remaining input
-
-(struct ParseResult (consumed? res next) #:transparent)
-
-;; A [Parser X] is a function: Input -> [ParseResult X]
+;; A [Parser X] is a function: Input -> [ParseOut X]
 ;;   where X is the type of the result, ie a Tree
 
 ;; Parser identifiers have a "$" prefix
+;; Parser generating functions typically use a "mk$" prefix
+
+;; A [ParseOut X] is one of:
+;;  -- (Consumed res:[ParseResult X])
+;;  -- (Empty res:[ParseResult X])
+;;     where res is a struct containing the result of parsing and remaining input
+;; The Consumed case indicates input was consumed and 
+;; the Empty case indicates that no input was consumed
+(struct Consumed (res) #:transparent)
+(struct Empty (res) #:transparent)
+
+;; A [ParseResult X] is one of:
+;;  -- (ParseResult x:X next:Input)
+;;     where: x is the result, with type X
+;;            next is the remaining input
+;;  -- 'Error
+;; (ParseResult is equiv to the [Reply X] datatype in the Parsec paper,
+;;  where the non-error case is equiv to the Ok constructor)
+(struct ParseResult (x next) #:transparent)
+
+
+
 
 ;; ----------------------------------------------------------------------------
 ;; Helper fns
@@ -56,40 +70,37 @@
 ;; basic parser combinators
 
 ;; mk$nop :: a -> Parser a
-;; makes a Parser that consumes no input and returns v (ie, a no-op)
+;; makes a Parser that consumes no input and returns x as result (ie, a no-op)
 ;; (equiv to result or return Parser in papers)
-(define (mk$nop v) (λ (inp) (ParseResult #f v inp)))
+(define (mk$nop x) (λ (inp) (Empty (ParseResult x inp))))
 
 ;; sat :: (Char -> Bool) -> Parser Char
-;; makes a Parser that consumes a char is given predicate is satisfied, 
+;; makes a Parser that consumes a char if given predicate is satisfied, 
 ;;   else fail
 (define (sat p?)
   (λ (inp)
-    (cond [(empty-string? inp) (ParseResult #f 'Error inp)]
+    (cond [(empty-string? inp) (Empty 'Error)]
           [else (let ([c (string-ref inp 0)]
                       [cs (substring inp 1)])
                   (if (p? c) 
-                      (ParseResult #t c cs)
-                      (ParseResult #f 'Error cs)))]))
-  #;(>>= $char 
-       (λ (x) (if (p? x) (mk$nop x) $fail))))
+                      (Consumed (ParseResult c cs))
+                      (Empty 'Error)))])))
 
 ;; >>= :: Parser a -> (a -> Parser b) -> Parser b
 ;; bind operator
 (define (>>= p f) 
   (λ (inp) 
     (match (p inp)
-      [(ParseResult #f x _) ((f x) inp)] ; inp-rest == inp
-      [(ParseResult #f 'Error _) (ParseResult #f 'Error inp)]
-      [(ParseResult #t x inp-rest)
-       (match ((f x) inp-rest)
-         [(ParseResult _ y inp-rest2)
-          (ParseResult #t y inp-rest2)])]
-      [res ; (ParseResult #t 'Error inp-rest)
-       res])
-    #;(apply append (map 
-                   (match-lambda [(ParseResult res next) ((f res) next)])
-                   (p inp)))))
+      [(Empty (ParseResult x rest)) ((f x) rest)]
+      [(Empty 'Error) (Empty 'Error)]
+      [(Consumed res1)
+       (Consumed
+        (match res1
+          [(ParseResult x rest)
+           (match ((f x) rest)
+             [(Consumed res2) res2]
+             [(Empty res2) res2])]
+          [err err]))])))
 
   
 ;; <or> :: Parser a -> Parser a -> Parser a
@@ -97,16 +108,15 @@
 (define (<or> p q) 
   (λ (inp) 
     (match (p inp)
-      [(ParseResult #f 'Error _) (q inp)]
-      [(ParseResult #f x _)
+      [(Empty 'Error) (q inp)]
+      [(Empty res)
        (match (q inp)
-         [(ParseResult #f _ _) (ParseResult #f x inp)]
+         [(Empty _) (Empty res)]
          [consumed consumed])]
-      [consumed consumed])
-    #;(append (p inp) (q inp))))
+      [consumed consumed])))
 
 ;; try :: Parser a -> Parser a
-(define (try $p)
+#;(define (try $p)
   (λ (inp)
     (match ($p inp)
       [(ParseResult #t 'Error _) (ParseResult #f 'Error inp)]
@@ -190,22 +200,18 @@
    (mk$nop null)))
 
    
-;; Parser Char -> Parser String
+;; [Parser X]  -> [Parser [ListOf X]]
 ;; (equiv to many1 in paper)
 ;; at least one, then kleene star
 (define (<+> p)
-  (~ c  <- p
-;     cs <- (<*> p)
-     cs <- ((<+> p) . <or> . (mk$nop null))
-     (cons c cs)))
+  (~ x  <- p
+     xs <- ((<+> p) . <or> . (mk$nop null))
+     (cons x xs)))
 
 ;; $ident :: Parser String
 ;; parses a Haskell identifier (begins with lowercase)
 (define $ident
-  (<+> (($letter . <or> . $digit) . <or> . (mk$char #\_)))
-  #;(~ c  <- $lower
-     cs <- (<*> $alphanum)
-     (str-cons c cs)))
+  (<+> (($letter . <or> . $digit) . <or> . (mk$char #\_))))
 
 ;; $nat :: Parser Int
 #;(define $nat

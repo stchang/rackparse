@@ -138,13 +138,6 @@
    . <or> .
    (mk$nop null)))
 
-;; $ident :: Parser String
-;; parses a Haskell identifier (begins with lowercase)
-(define $ident
-  (~ c  <- $lower
-     cs <- (<*> $alphanum)
-     (str-cons c cs)))
-   
 ;; Parser Char -> Parser String
 ;; (equiv to many1 in paper)
 ;; at least one, then kleene star
@@ -152,6 +145,16 @@
   (~ c  <- p
      cs <- (<*> p)
      (cons c cs)))
+
+;; $ident :: Parser String
+;; parses a Haskell identifier (begins with lowercase)
+(define $ident
+  (~ c  <- $lower
+     cs <- (<*> $alphanum)
+     (str-cons c cs)))
+#;(define $ident
+  (<+> (($letter . <or> . $digit) . <or> . (mk$char #\_))))
+
 
 ;; $nat :: Parser Int
 #;(define $nat
