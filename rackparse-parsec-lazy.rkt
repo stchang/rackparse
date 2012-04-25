@@ -80,10 +80,10 @@
 (define (sat p?)
   (λ (inp)
     (cond [(empty-string? inp) (Empty 'Error)]
-          [else (let ([c (string-ref inp 0)]
-                      [cs (substring inp 1)])
-                  (if (p? c) 
-                      (Consumed (ParseResult c cs))
+          [else (let ([c (string-ref inp 0)])
+                  (if (p? c)
+                      (let ([cs (substring inp 1)])
+                        (Consumed (ParseResult c cs)))
                       (Empty 'Error)))])))
 
 ;; >>= :: Parser a -> (a -> Parser b) -> Parser b
