@@ -4,11 +4,14 @@
 ;; Parsec implements LL1 grammars
 ;; returns first successful parse, even for ambiguous grammars
 
+;; no laziness
 
 ;; ----------------------------------------------------------------------------
 ;; Type declarations
 
-;; An Input is a String
+;; An Input is a [ListOf Char]
+
+;; [ ] in function signatures is type instantiation, not a list
 
 ;; A [Parser X] is a function: Input -> [ParseOut X]
 ;;   where X is the type of the result, ie a Tree
@@ -21,18 +24,21 @@
 ;;  -- (Empty res:[ParseResult X])
 ;;     where res is a struct containing the result of parsing and remaining input
 ;; The Consumed case indicates input was consumed and 
-;; the Empty case indicates that no input was consumed
+;; The Empty case indicates that no input was consumed
+;; INVARIANT:
+;;   If applying parser $p to input inp produces (Empty (ParseResult x rest))
+;;   then inp == rest
 (struct Consumed (res) #:transparent)
 (struct Empty (res) #:transparent)
 
 ;; A [ParseResult X] is one of:
-;;  -- (ParseResult x:X next:Input)
+;;  -- (ParseResult x:X rest:Input)
 ;;     where: x is the result, with type X
-;;            next is the remaining input
+;;            rest is the remaining input
 ;;  -- 'Error
 ;; (ParseResult is equiv to the [Reply X] datatype in the Parsec paper,
 ;;  where the non-error case is equiv to the Ok constructor)
-(struct ParseResult (x next) #:transparent)
+(struct ParseResult (x rest) #:transparent)
 
 
 
@@ -42,7 +48,6 @@
 
 ;; str-cons :: Char [ListOf Char] -> String
 (define (str-cons c cs) (string-append (string c) cs))
-
 (define (empty-string? s) (string=? "" s))
 
 ;; ----------------------------------------------------------------------------
@@ -61,8 +66,8 @@
 (define-syntax (~ stx)
   (syntax-case stx (<-)
     [(_ e) #'(mk$nop e)]
-    [(_ x <- p rest ...)
-     #'(>>= p (match-lambda [x (~ rest ...)]))]))
+    [(_ x <- $p rest ...)
+     #'(>>= $p (match-lambda [x (~ rest ...)]))]))
 
 
 
@@ -74,10 +79,11 @@
 ;; (equiv to result or return Parser in papers)
 (define (mk$nop x) (λ (inp) (Empty (ParseResult x inp))))
 
-;; sat :: (Char -> Bool) -> Parser Char
+;; mk$sat :: (Char -> Bool) -> Parser Char
 ;; makes a Parser that consumes a char if given predicate is satisfied, 
 ;;   else fail
-(define (sat p?)
+;; (equiv to sat Parser from paper)
+(define (mk$sat p?)
   (λ (inp)
     (cond [(empty-string? inp) (Empty 'Error)]
           [else (let ([c (string-ref inp 0)])
@@ -88,10 +94,23 @@
 
 ;; >>= :: Parser a -> (a -> Parser b) -> Parser b
 ;; bind operator
-(define (>>= p f) 
+(define (>>= $p f) 
   (λ (inp) 
-    (match (p inp)
-      [(Empty (ParseResult x rest)) ((f x) rest)]
+    (let ([out ($p inp)])
+      (if (Empty? out)
+          (let ([res (Empty-res out)])
+            (if (ParseResult? res)
+                ((f (ParseResult-x res)) inp)
+                (Empty 'Error)))
+          ; else Consumed
+          (Consumed
+           (let ([res1 (Consumed-res out)])
+             (if (ParseResult? res1)
+                 (let ([out1 ((f (ParseResult-x res1)) (ParseResult-rest res1))])
+                   (if (Consumed? out1) (Consumed-res out1) (Empty-res out1)))
+                 res1))))) ; error
+    #;(match ($p inp)
+      [(Empty (ParseResult x _)) ((f x) inp)]
       [(Empty 'Error) (Empty 'Error)]
       [(Consumed res1)
        (Consumed
@@ -105,12 +124,12 @@
   
 ;; <or> :: Parser a -> Parser a -> Parser a
 ;; choice combinator (ie "plus" or <|> or ++)
-(define (<or> p q) 
+(define (<or> $p $q) 
   (λ (inp) 
-    (match (p inp)
-      [(Empty 'Error) (q inp)]
+    (match ($p inp)
+      [(Empty 'Error) ($q inp)]
       [(Empty res)
-       (match (q inp)
+       (match ($q inp)
          [(Empty _) (Empty res)]
          [consumed consumed])]
       [consumed consumed])))
@@ -135,21 +154,21 @@
 ;; (equiv to item in paper)
 ;; parses one char of non-empty input, or fail
 (define ($char inp)
-  (if (string=? inp "")
-      null
-      (list (ParseResult (string-ref inp 0) (substring inp 1)))))
+  (if (empty-string? inp)
+      (Empty 'Error)
+      (Consumed (ParseResult (string-ref inp 0) (substring inp 1)))))
 
 ;; ----------------------------
 ;; combinators derived from sat
   
 ;; mk$char :: Char -> Parser Char
-(define (mk$char c1) (sat (λ (c2) (eq? c1 c2))))
+(define (mk$char c1) (mk$sat (λ (c2) (eq? c1 c2))))
 
 ;; $digit, $lower, $upper :: Parser Char
 ;; parsers one number, lowercase, or uppercase char
-(define $digit (sat (λ (x) (and (char<=? #\0 x) (char<=? x #\9)))))
-(define $lower (sat (λ (x) (and (char<=? #\a x) (char<=? x #\z)))))
-(define $upper (sat (λ (x) (and (char<=? #\A x) (char<=? x #\Z)))))
+(define $digit (mk$sat (λ (x) (and (char<=? #\0 x) (char<=? x #\9)))))
+(define $lower (mk$sat (λ (x) (and (char<=? #\a x) (char<=? x #\z)))))
+(define $upper (mk$sat (λ (x) (and (char<=? #\A x) (char<=? x #\Z)))))
 
  
 ;; ------------------------------
@@ -175,7 +194,7 @@
 (define $word
   (let ([$neWord (~ x  <- $letter
                     xs <- $word
-                    (string-append (string x) xs))])
+                    (str-cons x xs))])
     ($neWord . <or> . (mk$nop ""))))
 
 
@@ -183,29 +202,29 @@
 ;; mk$string :: String -> Parser String
 ;; makes a Parser that accepts the given string
 (define (mk$string s)
-  (if (string=? s "")
+  (if (empty-string? s)
       (mk$nop "")
       (~ c  <- (mk$char  (string-ref s 0))
          cs <- (mk$string (substring s 1))
          (str-cons c cs))))
 
-;; <*> :: Parser a -> Parser [a]
+;; <*> :: Parser a -> Parser [Listof a]
 ;; kleene star
 ;; (equiv to "many" combinator in paper)
-(define (<*> p)
-  ((~ x <- p
-      xs <- (<*> p)
+(define (<*> $p)
+  ((~ x <- $p
+      xs <- (<*> $p)
       (cons x xs))
    . <or> .
    (mk$nop null)))
 
    
-;; [Parser X]  -> [Parser [ListOf X]]
+;; <+> :: Parser a  -> Parser [ListOf a]
 ;; (equiv to many1 in paper)
 ;; at least one, then kleene star
-(define (<+> p)
-  (~ x  <- p
-     xs <- ((<+> p) . <or> . (mk$nop null))
+(define (<+> $p)
+  (~ x  <- $p
+     xs <- ((<+> $p) . <or> . (mk$nop null))
      (cons x xs)))
 
 ;; $ident :: Parser String
@@ -252,10 +271,10 @@
      (cons n ns)))
 
 ;; sepby1 :: Parser a -> Parser a -> Parser [ListOf a]
-(define (sepby1 p sep)
-  (~ x <- p
-     xs <- (<*> (~ _ <- sep
-                   y <- p
+(define (sepby1 $p $sep)
+  (~ x <- $p
+     xs <- (<*> (~ _ <- $sep
+                   y <- $p
                    y))
      (cons x xs)))
 
@@ -268,10 +287,10 @@
 
 ;; bracket :: Parser a -> Parser b -> Parser c -> Parser b
 ;; brackets Parser b with Parser a and c (latter 2 results are ignored)
-(define (mk$bracket open p close)
-  (~ _ <- open
-     x <- p
-     _ <- close
+(define (mk$bracket $open $p $close)
+  (~ _ <- $open
+     x <- $p
+     _ <- $close
      x))
 
 ;; $ints-sepby1-bracket :: Parser [ListOf Int]
@@ -281,8 +300,8 @@
               (mk$char #\])))
 
 ;; $sepby :: Parser a -> Parser b -> Parser [ListOf a]
-(define (sepby p sep)
-  ((sepby1 p sep)
+(define (sepby $p $sep)
+  ((sepby1 $p $sep)
    . <or> .
    (mk$nop null)))
 
@@ -315,14 +334,14 @@
                     (cons f y)))
      (foldl (match-lambda** [((cons f y) x) (f x y)]) x fys)))
 ; avoids creating intermediate list
-(define (chainl1 p op)
+(define (chainl1 $p $op)
   (define (f x)
-    ((op . >>= . (λ (g)
-     (p  . >>= . (λ (y)
+    (($op . >>= . (λ (g)
+     ($p  . >>= . (λ (y)
       (f (g x y))))))
      . <or> .
      (mk$nop x)))
-  (p . >>= . f))
+  ($p . >>= . f))
 (define ($expr inp) ((chainl1 $factor $addop) inp))
 #;(define $addop
   ((~ _ <- (mk$char #\+)
@@ -345,10 +364,10 @@
              (cons (mk$char #\-) -))))
 
 ;; chainr1 :: Parser a -> Parser (a -> a -> a) -> Parser a
-(define (chainr1 p op)
-  (p . >>= . (λ (x)
-  ((~ f <- op
-      y <- (chainr1 p op)
+(define (chainr1 $p $op)
+  ($p . >>= . (λ (x)
+  ((~ f <- $op
+      y <- (chainr1 $p $op)
       (f x y))
    . <or> .
    (mk$nop x)))))

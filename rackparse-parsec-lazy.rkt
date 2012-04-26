@@ -4,11 +4,14 @@
 ;; Parsec implements LL1 grammars
 ;; returns first successful parse, even for ambiguous grammars
 
+;; add laziness
 
 ;; ----------------------------------------------------------------------------
 ;; Type declarations
 
-;; An Input is a String
+;; An Input is a [ListOf Char]
+
+;; [ ] in function signatures is type instantiation, not a list
 
 ;; A [Parser X] is a function: Input -> [ParseOut X]
 ;;   where X is the type of the result, ie a Tree
@@ -42,7 +45,6 @@
 
 ;; str-cons :: Char [ListOf Char] -> String
 (define (str-cons c cs) (string-append (string c) cs))
-
 (define (empty-string? s) (string=? "" s))
 
 ;; ----------------------------------------------------------------------------
@@ -74,10 +76,11 @@
 ;; (equiv to result or return Parser in papers)
 (define (mk$nop x) (λ (inp) (Empty (ParseResult x inp))))
 
-;; sat :: (Char -> Bool) -> Parser Char
+;; mk$sat :: (Char -> Bool) -> Parser Char
 ;; makes a Parser that consumes a char if given predicate is satisfied, 
 ;;   else fail
-(define (sat p?)
+;; (equiv to sat Parser from paper)
+(define (mk$sat p?)
   (λ (inp)
     (cond [(empty-string? inp) (Empty 'Error)]
           [else (let ([c (string-ref inp 0)])
@@ -88,10 +91,10 @@
 
 ;; >>= :: Parser a -> (a -> Parser b) -> Parser b
 ;; bind operator
-(define (>>= p f) 
+(define (>>= $p f) 
   (λ (inp) 
-    (match (p inp)
-      [(Empty (ParseResult x rest)) ((f x) rest)]
+    (match ($p inp)
+      [(Empty (ParseResult x _)) ((f x) inp)]
       [(Empty 'Error) (Empty 'Error)]
       [(Consumed res1)
        (Consumed
@@ -135,21 +138,21 @@
 ;; (equiv to item in paper)
 ;; parses one char of non-empty input, or fail
 (define ($char inp)
-  (if (string=? inp "")
-      null
-      (list (ParseResult (string-ref inp 0) (substring inp 1)))))
+  (if (empty-string? inp)
+      (Empty 'Error)
+      (Consumed (ParseResult (string-ref inp 0) (substring inp 1)))))
 
 ;; ----------------------------
 ;; combinators derived from sat
   
 ;; mk$char :: Char -> Parser Char
-(define (mk$char c1) (sat (λ (c2) (eq? c1 c2))))
+(define (mk$char c1) (mk$sat (λ (c2) (eq? c1 c2))))
 
 ;; $digit, $lower, $upper :: Parser Char
 ;; parsers one number, lowercase, or uppercase char
-(define $digit (sat (λ (x) (and (char<=? #\0 x) (char<=? x #\9)))))
-(define $lower (sat (λ (x) (and (char<=? #\a x) (char<=? x #\z)))))
-(define $upper (sat (λ (x) (and (char<=? #\A x) (char<=? x #\Z)))))
+(define $digit (mk$sat (λ (x) (and (char<=? #\0 x) (char<=? x #\9)))))
+(define $lower (mk$sat (λ (x) (and (char<=? #\a x) (char<=? x #\z)))))
+(define $upper (mk$sat (λ (x) (and (char<=? #\A x) (char<=? x #\Z)))))
 
  
 ;; ------------------------------
